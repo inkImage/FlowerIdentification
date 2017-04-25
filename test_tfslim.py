@@ -1,38 +1,32 @@
  
 import math
 import numpy as np
-import tensorflow as tf
 import time
-from preprocessing import inception_preprocessing
+import os
 
-from datasets import dataset_utils
-
+import tensorflow as tf
 # Main slim library
 slim = tf.contrib.slim
 
+from datasets import flowers
+from datasets import dataset_utils
+
+from nets import inception
+from preprocessing import inception_preprocessing
+
+####################################################################################
+################################### Dataset ########################################
+####################################################################################
 # Download dataset (flowers)
-#url = "http://download.tensorflow.org/data/flowers.tar.gz"
-flowers_data_dir = '/tmp/flowers'
+url = "http://download.tensorflow.org/data/flowers.tar.gz"
+flowers_data_dir = 'mydata/flowers'
 
-#if not tf.gfile.Exists(flowers_data_dir):
-#    tf.gfile.MakeDirs(flowers_data_dir)
-
+if not tf.gfile.Exists(flowers_data_dir):
+    tf.gfile.MakeDirs(flowers_data_dir)
+    
 #dataset_utils.download_and_uncompress_tarball(url, flowers_data_dir)
 
-# Download V1
-#url = "http://download.tensorflow.org/models/inception_v1_2016_08_28.tar.gz"
-checkpoints_dir = '/tmp/checkpoints'
-
-#if not tf.gfile.Exists(checkpoints_dir):
-#    tf.gfile.MakeDirs(checkpoints_dir)
-
-#dataset_utils.download_and_uncompress_tarball(url, checkpoints_dir)
-
-
-
-slim = tf.contrib.slim
-
-
+# Batch loading method, provides images, and labels 
 def load_batch(dataset, batch_size=32, height=299, width=299, is_training=False):
     """Loads a single batch of data.
     
@@ -70,14 +64,21 @@ def load_batch(dataset, batch_size=32, height=299, width=299, is_training=False)
     
     return images, images_raw, labels
 
+####################################################################################
+################################## ANN  ############################################
+####################################################################################
+
+# Download V1
+url = "http://download.tensorflow.org/models/inception_v1_2016_08_28.tar.gz"
+checkpoints_dir = 'mydata/checkpoints'
+
+if not tf.gfile.Exists(checkpoints_dir):
+    tf.gfile.MakeDirs(checkpoints_dir)
+
+#dataset_utils.download_and_uncompress_tarball(url, checkpoints_dir)
+
+
 # Fine-tune model on flower dataset
-import os
-
-from datasets import flowers
-from nets import inception
-from preprocessing import inception_preprocessing
-
-slim = tf.contrib.slim
 image_size = inception.inception_v1.default_image_size
 
 
@@ -102,88 +103,89 @@ def get_init_fn():
       variables_to_restore)
 
 
-train_dir = '/tmp/inception_finetuned/'
+train_dir = 'mydata/inception_finetuned/'
 
-with tf.Graph().as_default():
-    tf.logging.set_verbosity(tf.logging.INFO)
-    
-    dataset = flowers.get_split('train', flowers_data_dir)
-    images, _, labels = load_batch(dataset, height=image_size, width=image_size)
-    
-    # Create the model, use the default arg scope to configure the batch norm parameters.
-    with slim.arg_scope(inception.inception_v1_arg_scope()):
-        logits, _ = inception.inception_v1(images, num_classes=dataset.num_classes, is_training=True)
+def train():
+    with tf.Graph().as_default():
+        #tf.logging.set_verbosity(tf.logging.INFO) # not showing INFO logs
         
-    # Specify the loss function:
-    one_hot_labels = slim.one_hot_encoding(labels, dataset.num_classes)
-    slim.losses.softmax_cross_entropy(logits, one_hot_labels)
-    total_loss = slim.losses.get_total_loss()
-
-    # Create some summaries to visualize the training process:
-    tf.summary.scalar('losses/Total Loss', total_loss)
-  
-    # Specify the optimizer and create the train op:
-    optimizer = tf.train.AdamOptimizer(learning_rate=0.01)
-    train_op = slim.learning.create_train_op(total_loss, optimizer)
-    
-    # Run the training:
-    final_loss = slim.learning.train(
-        train_op,
-        logdir=train_dir,
-        init_fn=get_init_fn(),
-        number_of_steps=500)
+        dataset = flowers.get_split('train', flowers_data_dir)
+        images, _, labels = load_batch(dataset, height=image_size, width=image_size)
         
-  
-print('Finished training. Last batch loss %f' % final_loss)
+        # Create the model, use the default arg scope to configure the batch norm parameters.
+        with slim.arg_scope(inception.inception_v1_arg_scope()):
+            logits, _ = inception.inception_v1(images, num_classes=dataset.num_classes, is_training=True)
+            
+        # Specify the loss function:
+        one_hot_labels = slim.one_hot_encoding(labels, dataset.num_classes)
+       # slim.losses.softmax_cross_entropy(logits, one_hot_labels) # name update (see below)
+        tf.losses.softmax_cross_entropy(logits, one_hot_labels)
+        #total_loss = slim.losses.get_total_loss()  # name update (see below)
+        total_loss = tf.losses.get_total_loss()
 
-
-#### Precision metrics needed
-
-
-import numpy as np
-import tensorflow as tf
-from datasets import flowers
-from nets import inception
-
-slim = tf.contrib.slim
-
-image_size = inception.inception_v1.default_image_size
-batch_size = 250
-correct = 0
-
-with tf.Graph().as_default():
-    tf.logging.set_verbosity(tf.logging.INFO)
+        # Create some summaries to visualize the training process:
+        tf.summary.scalar('losses/Total Loss', total_loss)
     
-    dataset = flowers.get_split('train', flowers_data_dir)
-    images, images_raw, labels = load_batch(dataset, batch_size=250, height=image_size, width=image_size)
-    # Create the model, use the default arg scope to configure the batch norm parameters.
-    with slim.arg_scope(inception.inception_v1_arg_scope()):
-        logits, _ = inception.inception_v1(images, num_classes=dataset.num_classes, is_training=True)
+        # Specify the optimizer and create the train op:
+        optimizer = tf.train.AdamOptimizer(learning_rate=0.01)
+        train_op = slim.learning.create_train_op(total_loss, optimizer)
+        
+        # Run the training:
+        final_loss = slim.learning.train(
+            train_op,
+            logdir=train_dir,
+            init_fn=get_init_fn(),
+            number_of_steps=100)
 
-    probabilities = tf.nn.softmax(logits)
+        
     
-    checkpoint_path = tf.train.latest_checkpoint(train_dir)
-    init_fn = slim.assign_from_checkpoint_fn(
-      checkpoint_path,
-      slim.get_variables_to_restore())
-    
-    with tf.Session() as sess:
-        with slim.queues.QueueRunners(sess):
-            sess.run(tf.initialize_local_variables())
-            init_fn(sess)
-            np_probabilities, np_images_raw, np_labels = sess.run([probabilities, images_raw, labels])
-    
-            for i in range(batch_size): 
-                image = np_images_raw[i, :, :, :]
-                true_label = np_labels[i]
-                predicted_label = np.argmax(np_probabilities[i, :])
-                predicted_name = dataset.labels_to_names[predicted_label]
-                true_name = dataset.labels_to_names[true_label]
-                
-                if true_name == predicted_name:
-                    correct = correct + 1
-                    
-            prec = correct/ batch_size
-            print ("Precision for %s pictures is %f" %(batch_size, prec))
-                
+    print('Finished training. Last batch loss %f' % final_loss)
 
+train()
+
+####################################################################################
+################################## Metrics #########################################
+####################################################################################
+
+def eval():
+    # This might take a few minutes.
+    image_size = inception.inception_v1.default_image_size
+
+    with tf.Graph().as_default():
+        #tf.logging.set_verbosity(tf.logging.INFO)
+        
+        dataset = flowers.get_split('train', flowers_data_dir)
+        images, images_raw, labels = load_batch(dataset, height=image_size, width=image_size)
+        
+        # Create the model, use the default arg scope to configure the batch norm parameters.
+        with slim.arg_scope(inception.inception_v1_arg_scope()):
+            logits, _ = inception.inception_v1(images, num_classes=dataset.num_classes, is_training=True)
+
+        predictions = tf.argmax(logits, 1)     
+ 
+        checkpoint_path = tf.train.latest_checkpoint(train_dir)
+        init_fn = slim.assign_from_checkpoint_fn(
+        checkpoint_path,
+        slim.get_variables_to_restore())
+        
+        # Define the metrics:
+        names_to_values, names_to_updates = slim.metrics.aggregate_metric_map({
+            'eval/Accuracy': slim.metrics.streaming_accuracy(predictions, labels),
+            'eval/Recall@5': slim.metrics.streaming_sparse_recall_at_k(logits, labels, 5)
+            
+        })
+
+        print('Running evaluation Loop...')
+        checkpoint_path = tf.train.latest_checkpoint(train_dir)
+        metric_values = slim.evaluation.evaluate_once(
+            master='',
+            checkpoint_path=checkpoint_path,
+            logdir=train_dir,
+            eval_op=list(names_to_updates.values()),
+            final_op=list(names_to_values.values()))
+
+        names_to_values = dict(zip(names_to_values.keys(), metric_values))
+        for name in names_to_values:
+            print('%s: %f' % (name, names_to_values[name]))
+            
+eval()           
